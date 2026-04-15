@@ -1,0 +1,762 @@
+From de9879cafcfc455e03c41d6bb9db70199bda7031 Mon Sep 17 00:00:00 2001
+From: Ilep <ilep@noreply.com>
+Date: Fri, 10 Apr 2026 13:50:25 +0300
+Subject: [PATCH 1/6] Add auth to local proxy
+
+---
+ app/src/main/java/io/nekohasekai/sagernet/Constants.kt |  2 ++
+ .../java/io/nekohasekai/sagernet/database/DataStore.kt |  7 +++++++
+ .../java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt  |  6 ++++++
+ .../sagernet/ui/SettingsPreferenceFragment.kt          |  4 ++++
+ app/src/main/java/moe/matsuri/nb4a/utils/Util.kt       |  8 ++++++++
+ app/src/main/res/xml/global_preferences.xml            | 10 ++++++++++
+ 6 files changed, 37 insertions(+)
+
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/Constants.kt b/app/src/main/java/io/nekohasekai/sagernet/Constants.kt
+index caf363f6f..13228df10 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/Constants.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/Constants.kt
+@@ -37,6 +37,8 @@ object Key {
+     const val BYPASS_LAN_IN_CORE = "bypassLanInCore"
+ 
+     const val MIXED_PORT = "mixedPort"
++    const val MIXED_USERNAME = "mixedUsername"
++    const val MIXED_PASSWORD = "mixedPassword"
+     const val ALLOW_ACCESS = "allowAccess"
+     const val SPEED_INTERVAL = "speedInterval"
+     const val SHOW_DIRECT_SPEED = "showDirectSpeed"
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt b/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt
+index 06bb50133..d70b3c1dc 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt
+@@ -20,6 +20,7 @@ import io.nekohasekai.sagernet.ktx.string
+ import io.nekohasekai.sagernet.ktx.stringToInt
+ import io.nekohasekai.sagernet.ktx.stringToIntIfExists
+ import moe.matsuri.nb4a.TempDatabase
++import moe.matsuri.nb4a.utils.Util
+ 
+ object DataStore : OnPreferenceDataStoreChangeListener {
+ 
+@@ -128,11 +129,17 @@ object DataStore : OnPreferenceDataStoreChangeListener {
+     var mixedPort: Int
+         get() = getLocalPort(Key.MIXED_PORT, 2080)
+         set(value) = saveLocalPort(Key.MIXED_PORT, value)
++    var mixedUsername by configurationStore.string(Key.MIXED_USERNAME) { "User" }
++    var mixedPassword by configurationStore.string(Key.MIXED_PASSWORD) { Util.generateCryptoSecurePassword() }
+ 
+     fun initGlobal() {
+         if (configurationStore.getString(Key.MIXED_PORT) == null) {
+             mixedPort = mixedPort
+         }
++
++        if (configurationStore.getString(Key.MIXED_PASSWORD) == null) {
++            mixedPassword = Util.generateCryptoSecurePassword()
++        }
+     }
+ 
+ 
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt b/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
+index 8fe0a2944..87ad98558 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
+@@ -232,6 +232,12 @@ fun buildConfig(
+                 domain_strategy = genDomainStrategy(DataStore.resolveDestination)
+                 sniff = needSniff
+                 sniff_override_destination = needSniffOverride
++                users = listOf(
++                    User().apply {
++                        username = DataStore.mixedUsername
++                        password = DataStore.mixedPassword
++                    },
++                )
+             })
+         }
+ 
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt b/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
+index 18d645455..22d1a389c 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
+@@ -62,6 +62,8 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
+             true
+         }
+         val mixedPort = findPreference<EditTextPreference>(Key.MIXED_PORT)!!
++        val mixedUsername = findPreference<EditTextPreference>(Key.MIXED_USERNAME)!!
++        val mixedPassword = findPreference<EditTextPreference>(Key.MIXED_PASSWORD)!!
+         val serviceMode = findPreference<Preference>(Key.SERVICE_MODE)!!
+         val allowAccess = findPreference<Preference>(Key.ALLOW_ACCESS)!!
+         val appendHttpProxy = findPreference<SwitchPreference>(Key.APPEND_HTTP_PROXY)!!
+@@ -149,6 +151,8 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
+         }
+ 
+         mixedPort.onPreferenceChangeListener = reloadListener
++        mixedUsername.onPreferenceChangeListener = reloadListener
++        mixedPassword.onPreferenceChangeListener = reloadListener
+         appendHttpProxy.onPreferenceChangeListener = reloadListener
+         showDirectSpeed.onPreferenceChangeListener = reloadListener
+         trafficSniffing.onPreferenceChangeListener = reloadListener
+diff --git a/app/src/main/java/moe/matsuri/nb4a/utils/Util.kt b/app/src/main/java/moe/matsuri/nb4a/utils/Util.kt
+index c5ae09abb..30e6bf9ee 100644
+--- a/app/src/main/java/moe/matsuri/nb4a/utils/Util.kt
++++ b/app/src/main/java/moe/matsuri/nb4a/utils/Util.kt
+@@ -197,4 +197,12 @@ object Util {
+         val encoded = match?.groupValues?.get(1) ?: ""
+         return URLDecoder.decode(encoded, StandardCharsets.UTF_8.name())
+     }
++
++    fun generateCryptoSecurePassword(length: Int = 10): String {
++        val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()"
++        val secureRandom = java.security.SecureRandom()
++        return (1..length)
++            .map { chars[secureRandom.nextInt(chars.length)] }
++            .joinToString("")
++    }
+ }
+diff --git a/app/src/main/res/xml/global_preferences.xml b/app/src/main/res/xml/global_preferences.xml
+index 64f4f7901..8cf42d950 100644
+--- a/app/src/main/res/xml/global_preferences.xml
++++ b/app/src/main/res/xml/global_preferences.xml
+@@ -194,6 +194,16 @@
+             app:key="mixedPort"
+             app:title="@string/port_proxy"
+             app:useSimpleSummaryProvider="true" />
++        <EditTextPreference
++            app:defaultValue="User"
++            app:key="mixedUsername"
++            app:title="Proxy Username"
++            app:useSimpleSummaryProvider="true" />
++        <EditTextPreference
++            app:icon="@drawable/ic_settings_password"
++            app:key="mixedPassword"
++            app:title="Proxy Password"
++            app:useSimpleSummaryProvider="true" />
+         <SwitchPreference
+             app:defaultValue="false"
+             app:key="appendHttpProxy"
+
+From 7410cdc34d9664197de4828481689fb977e1199a Mon Sep 17 00:00:00 2001
+From: Idiot Ebrilo <idiotebrilo@gmail.com>
+Date: Tue, 14 Apr 2026 23:37:29 +0000
+Subject: [PATCH 2/6] Add socks proxy control
+
+---
+ .../java/io/nekohasekai/sagernet/Constants.kt |  1 +
+ .../sagernet/database/DataStore.kt            |  1 +
+ .../nekohasekai/sagernet/fmt/ConfigBuilder.kt | 32 ++++++++++---------
+ .../sagernet/ui/SettingsPreferenceFragment.kt | 22 +++++++++++++
+ app/src/main/res/values-ru/strings.xml        |  2 ++
+ app/src/main/res/values/strings.xml           |  2 ++
+ app/src/main/res/xml/global_preferences.xml   |  5 +++
+ 7 files changed, 50 insertions(+), 15 deletions(-)
+
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/Constants.kt b/app/src/main/java/io/nekohasekai/sagernet/Constants.kt
+index 13228df10..7b9b83e74 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/Constants.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/Constants.kt
+@@ -40,6 +40,7 @@ object Key {
+     const val MIXED_USERNAME = "mixedUsername"
+     const val MIXED_PASSWORD = "mixedPassword"
+     const val ALLOW_ACCESS = "allowAccess"
++    const val DISABLE_MIXED = "disableMixed"
+     const val SPEED_INTERVAL = "speedInterval"
+     const val SHOW_DIRECT_SPEED = "showDirectSpeed"
+ 
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt b/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt
+index d70b3c1dc..730d4093d 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt
+@@ -142,6 +142,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
+         }
+     }
+ 
++    var disableMixed by configurationStore.boolean(Key.DISABLE_MIXED)
+ 
+     private fun getLocalPort(key: String, default: Int): Int {
+         return parsePort(configurationStore.getString(key), default + userIndex)
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt b/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
+index 87ad98558..d2194e6c5 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
+@@ -224,21 +224,23 @@ fun buildConfig(
+                     }
+                 }
+             })
+-            inbounds.add(Inbound_MixedOptions().apply {
+-                type = "mixed"
+-                tag = TAG_MIXED
+-                listen = bind
+-                listen_port = DataStore.mixedPort
+-                domain_strategy = genDomainStrategy(DataStore.resolveDestination)
+-                sniff = needSniff
+-                sniff_override_destination = needSniffOverride
+-                users = listOf(
+-                    User().apply {
+-                        username = DataStore.mixedUsername
+-                        password = DataStore.mixedPassword
+-                    },
+-                )
+-            })
++            if (!DataStore.disableMixed) {
++                inbounds.add(Inbound_MixedOptions().apply {
++                    type = "mixed"
++                    tag = TAG_MIXED
++                    listen = bind
++                    listen_port = DataStore.mixedPort
++                    domain_strategy = genDomainStrategy(DataStore.resolveDestination)
++                    sniff = needSniff
++                    sniff_override_destination = needSniffOverride
++                    users = listOf(
++                        User().apply {
++                            username = DataStore.mixedUsername
++                            password = DataStore.mixedPassword
++                        },
++                    )
++                })
++            }
+         }
+ 
+         outbounds = mutableListOf()
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt b/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
+index 22d1a389c..a79af4a27 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
+@@ -64,6 +64,7 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
+         val mixedPort = findPreference<EditTextPreference>(Key.MIXED_PORT)!!
+         val mixedUsername = findPreference<EditTextPreference>(Key.MIXED_USERNAME)!!
+         val mixedPassword = findPreference<EditTextPreference>(Key.MIXED_PASSWORD)!!
++        val disableMixed = findPreference<SwitchPreference>(Key.DISABLE_MIXED)!!
+         val serviceMode = findPreference<Preference>(Key.SERVICE_MODE)!!
+         val allowAccess = findPreference<Preference>(Key.ALLOW_ACCESS)!!
+         val appendHttpProxy = findPreference<SwitchPreference>(Key.APPEND_HTTP_PROXY)!!
+@@ -150,9 +151,30 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
+             true
+         }
+ 
++        val mixedPrefsToToggle = listOf(
++            findPreference<Preference>("mixedPort"),
++            findPreference<Preference>("mixedUsername"),
++            findPreference<Preference>("mixedPassword"),
++            findPreference<Preference>("appendHttpProxy"),
++            findPreference<Preference>("allowAccess")
++        )
++
++        fun updateMixedPrefsState(disabled: Boolean) {
++            mixedPrefsToToggle.forEach { it?.isEnabled = !disabled }
++        }
++
++        updateMixedPrefsState(disableMixed?.isChecked == true)
++
++        disableMixed?.setOnPreferenceChangeListener { _, newValue ->
++            updateMixedPrefsState(newValue as Boolean)
++            needReload()
++            true
++        }
++
+         mixedPort.onPreferenceChangeListener = reloadListener
+         mixedUsername.onPreferenceChangeListener = reloadListener
+         mixedPassword.onPreferenceChangeListener = reloadListener
++        //disableMixed.onPreferenceChangeListener = reloadListener
+         appendHttpProxy.onPreferenceChangeListener = reloadListener
+         showDirectSpeed.onPreferenceChangeListener = reloadListener
+         trafficSniffing.onPreferenceChangeListener = reloadListener
+diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
+index bc8c4b2ae..8d8f77a07 100644
+--- a/app/src/main/res/values-ru/strings.xml
++++ b/app/src/main/res/values-ru/strings.xml
+@@ -27,6 +27,8 @@
+ <string name="ads">Реклама</string>
+ <string name="allow_access">Разрешить подключения из локальной сети</string>
+ <string name="allow_access_sum">Привязать входящие серверы к 0.0.0.0</string>
++<string name="disable_mixed">Отключить прокси SOCKS5</string>
++<string name="disable_mixed_sum">Отключить прокси SOCKS5 для недопущения утечки внешнего IP сервера VPN</string>
+ <string name="allow_insecure">Разрешить небезопасное подключение</string>
+ <string name="allow_insecure_on_request_sum">Отключить проверку сертификатов при обновлении подписок</string>
+ <string name="allow_insecure_sum">Отключить проверку сертификата. При включении эта функция настолько же безопасна как передача пароля в открытом виде</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 1995ff051..747dcaf70 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -58,6 +58,8 @@
+     <string name="cag_route">Route Settings</string>
+     <string name="allow_access">Allow Connections from the LAN</string>
+     <string name="allow_access_sum">Bind inbound servers to 0.0.0.0</string>
++    <string name="disable_mixed">Disable SOCKS5 proxy</string>
++    <string name="disable_mixed_sum">SOCKS5 proxy can be disabled to prevent VPN server external IP leak</string>
+     <string name="inbound_settings">Inbound Settings</string>
+     <string name="general_settings">App Settings</string>
+     <string name="require_http">Enable HTTP inbound</string>
+diff --git a/app/src/main/res/xml/global_preferences.xml b/app/src/main/res/xml/global_preferences.xml
+index 8cf42d950..348709b7e 100644
+--- a/app/src/main/res/xml/global_preferences.xml
++++ b/app/src/main/res/xml/global_preferences.xml
+@@ -214,6 +214,11 @@
+             app:key="allowAccess"
+             app:summary="@string/allow_access_sum"
+             app:title="@string/allow_access" />
++        <SwitchPreference
++            app:defaultValue="false"
++            app:key="disableMixed"
++            app:summary="@string/disable_mixed_sum"
++            app:title="@string/disable_mixed" />
+     </PreferenceCategory>
+ 
+     <PreferenceCategory app:title="@string/cag_misc">
+
+From 0817758f9ce292be1a03d7307096b135958ba196 Mon Sep 17 00:00:00 2001
+From: Idiot Ebrilo <idiotebrilo@gmail.com>
+Date: Tue, 14 Apr 2026 23:39:43 +0000
+Subject: [PATCH 3/6] Add random credentials to outbound socks proxy
+
+---
+ .../nekohasekai/sagernet/bg/proto/BoxInstance.kt  |  4 +++-
+ .../nekohasekai/sagernet/database/ProxyEntity.kt  |  5 ++++-
+ .../io/nekohasekai/sagernet/fmt/ConfigBuilder.kt  | 15 ++++++++++++---
+ .../io/nekohasekai/sagernet/fmt/naive/NaiveFmt.kt |  8 ++++++--
+ app/src/main/res/values-ru/strings.xml            |  2 ++
+ app/src/main/res/values/strings.xml               |  2 ++
+ app/src/main/res/xml/global_preferences.xml       |  8 ++++----
+ 7 files changed, 33 insertions(+), 11 deletions(-)
+
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/bg/proto/BoxInstance.kt b/app/src/main/java/io/nekohasekai/sagernet/bg/proto/BoxInstance.kt
+index 9f16723de..05920b2c7 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/bg/proto/BoxInstance.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/bg/proto/BoxInstance.kt
+@@ -56,6 +56,8 @@ abstract class BoxInstance(
+         buildConfig()
+         for ((chain) in config.externalIndex) {
+             chain.entries.forEachIndexed { index, (port, profile) ->
++                val creds = config.localProxyCredentials[port] ?: error("No local proxy credentials for port $port")
++                val (localProxyUsername, localProxyPassword) = creds
+                 when (val bean = profile.requireBean()) {
+                     is TrojanGoBean -> {
+                         initPlugin("trojan-go-plugin")
+@@ -69,7 +71,7 @@ abstract class BoxInstance(
+ 
+                     is NaiveBean -> {
+                         initPlugin("naive-plugin")
+-                        pluginConfigs[port] = profile.type to bean.buildNaiveConfig(port)
++                        pluginConfigs[port] = profile.type to bean.buildNaiveConfig(port, localProxyUsername, localProxyPassword)
+                     }
+ 
+                     is HysteriaBean -> {
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/database/ProxyEntity.kt b/app/src/main/java/io/nekohasekai/sagernet/database/ProxyEntity.kt
+index b975695cb..edb9e0523 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/database/ProxyEntity.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/database/ProxyEntity.kt
+@@ -288,8 +288,11 @@ data class ProxyEntity(
+                             }
+ 
+                             is NaiveBean -> {
++                                val localProxyCredentials = config.localProxyCredentials[port]
++                                val localProxyUsername = localProxyCredentials?.first ?: ""
++                                val localProxyPassword = localProxyCredentials?.second ?: ""
+                                 append("\n\n")
+-                                append(bean.buildNaiveConfig(port))
++                                append(bean.buildNaiveConfig(port, localProxyUsername, localProxyPassword))
+                             }
+ 
+                             is HysteriaBean -> {
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt b/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
+index d2194e6c5..2b62e455c 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
+@@ -55,6 +55,7 @@ class ConfigBuildResult(
+     var trafficMap: Map<String, List<ProxyEntity>>,
+     var profileTagMap: Map<Long, String>,
+     val selectorGroupId: Long,
++    val localProxyCredentials: Map<Int, Pair<String, String>>,
+ ) {
+     data class IndexEntity(var chain: LinkedHashMap<Int, ProxyEntity>)
+ }
+@@ -62,7 +63,8 @@ class ConfigBuildResult(
+ fun buildConfig(
+     proxy: ProxyEntity, forTest: Boolean = false, forExport: Boolean = false
+ ): ConfigBuildResult {
+-
++    val localProxyCredentials = HashMap<Int, Pair<String, String>>()
++    
+     if (proxy.type == TYPE_CONFIG) {
+         val bean = proxy.requireBean() as ConfigBean
+         if (bean.type == 0) {
+@@ -72,7 +74,8 @@ fun buildConfig(
+                 proxy.id, //
+                 mapOf(TAG_PROXY to listOf(proxy)), //
+                 mapOf(proxy.id to TAG_PROXY), //
+-                -1L
++                -1L,
++                localProxyCredentials
+             )
+         }
+     }
+@@ -334,11 +337,16 @@ fun buildConfig(
+ 
+                 if (proxyEntity.needExternal()) { // externel outbound
+                     val localPort = mkPort()
++                    val localProxyUsername = Util.generateCryptoSecurePassword()
++                    val localProxyPassword = Util.generateCryptoSecurePassword()
+                     externalChainMap[localPort] = proxyEntity
++                    localProxyCredentials[localPort] = localProxyUsername to localProxyPassword
+                     currentOutbound = Outbound_SocksOptions().apply {
+                         type = "socks"
+                         server = LOCALHOST
+                         server_port = localPort
++                        username = localProxyUsername
++                        password = localProxyPassword
+                     }
+                 } else {
+                     // internal outbound
+@@ -756,7 +764,8 @@ fun buildConfig(
+             proxy.id,
+             trafficMap,
+             tagMap,
+-            if (buildSelector) group.id else -1L
++            if (buildSelector) group.id else -1L,
++            localProxyCredentials
+         )
+     }
+ 
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/fmt/naive/NaiveFmt.kt b/app/src/main/java/io/nekohasekai/sagernet/fmt/naive/NaiveFmt.kt
+index cab350e65..0b967bb5e 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/fmt/naive/NaiveFmt.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/fmt/naive/NaiveFmt.kt
+@@ -5,6 +5,7 @@ import io.nekohasekai.sagernet.fmt.LOCALHOST
+ import io.nekohasekai.sagernet.ktx.*
+ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+ import org.json.JSONObject
++import android.net.Uri
+ 
+ fun parseNaive(link: String): NaiveBean {
+     val proto = link.substringAfter("+").substringBefore(":")
+@@ -54,7 +55,7 @@ fun NaiveBean.toUri(proxyOnly: Boolean = false): String {
+     return builder.toLink(if (proxyOnly) proto else "naive+$proto", false)
+ }
+ 
+-fun NaiveBean.buildNaiveConfig(port: Int): String {
++fun NaiveBean.buildNaiveConfig(port: Int, localProxyUsername: String, localProxyPassword: String): String {
+     return JSONObject().apply {
+         // process ipv6
+         finalAddress = finalAddress.wrapIPV6Host()
+@@ -75,7 +76,10 @@ fun NaiveBean.buildNaiveConfig(port: Int): String {
+             }
+         }
+ 
+-        put("listen", "socks://$LOCALHOST:$port")
++        val usernameEnc = Uri.encode(localProxyUsername)
++        val passwordEnc = Uri.encode(localProxyPassword)
++
++        put("listen", "socks://$usernameEnc:$passwordEnc@$LOCALHOST:$port")
+         put("proxy", toUri(true))
+         if (extraHeaders.isNotBlank()) {
+             put("extra-headers", extraHeaders.split("\n").joinToString("\r\n"))
+diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
+index 8d8f77a07..e1f81e901 100644
+--- a/app/src/main/res/values-ru/strings.xml
++++ b/app/src/main/res/values-ru/strings.xml
+@@ -27,6 +27,8 @@
+ <string name="ads">Реклама</string>
+ <string name="allow_access">Разрешить подключения из локальной сети</string>
+ <string name="allow_access_sum">Привязать входящие серверы к 0.0.0.0</string>
++<string name="proxy_username">Юзернейм прокси</string>
++<string name="proxy_password">Пароль прокси</string>
+ <string name="disable_mixed">Отключить прокси SOCKS5</string>
+ <string name="disable_mixed_sum">Отключить прокси SOCKS5 для недопущения утечки внешнего IP сервера VPN</string>
+ <string name="allow_insecure">Разрешить небезопасное подключение</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 747dcaf70..aac087d3e 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -58,6 +58,8 @@
+     <string name="cag_route">Route Settings</string>
+     <string name="allow_access">Allow Connections from the LAN</string>
+     <string name="allow_access_sum">Bind inbound servers to 0.0.0.0</string>
++    <string name="proxy_username">Proxy Username</string>
++    <string name="proxy_password">Proxy Password</string>
+     <string name="disable_mixed">Disable SOCKS5 proxy</string>
+     <string name="disable_mixed_sum">SOCKS5 proxy can be disabled to prevent VPN server external IP leak</string>
+     <string name="inbound_settings">Inbound Settings</string>
+diff --git a/app/src/main/res/xml/global_preferences.xml b/app/src/main/res/xml/global_preferences.xml
+index 348709b7e..78c1c846e 100644
+--- a/app/src/main/res/xml/global_preferences.xml
++++ b/app/src/main/res/xml/global_preferences.xml
+@@ -197,13 +197,13 @@
+         <EditTextPreference
+             app:defaultValue="User"
+             app:key="mixedUsername"
+-            app:title="Proxy Username"
+-            app:useSimpleSummaryProvider="true" />
++            app:useSimpleSummaryProvider="true"
++            app:title="@string/proxy_username" />
+         <EditTextPreference
+             app:icon="@drawable/ic_settings_password"
+             app:key="mixedPassword"
+-            app:title="Proxy Password"
+-            app:useSimpleSummaryProvider="true" />
++            app:useSimpleSummaryProvider="true"
++            app:title="@string/proxy_password" />
+         <SwitchPreference
+             app:defaultValue="false"
+             app:key="appendHttpProxy"
+
+From 129f3577ee7c2cfe17b8ed8261a6fffa1308e831 Mon Sep 17 00:00:00 2001
+From: IdiotEbrilo <idotebrilo@gmail.com>
+Date: Wed, 15 Apr 2026 16:00:48 +0300
+Subject: [PATCH 4/6] UI refactoring
+
+---
+ app/src/main/java/io/nekohasekai/sagernet/Constants.kt |  2 +-
+ .../java/io/nekohasekai/sagernet/database/DataStore.kt |  2 +-
+ .../java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt  |  2 +-
+ .../sagernet/ui/SettingsPreferenceFragment.kt          |  8 ++++----
+ app/src/main/res/values-ru/strings.xml                 |  8 ++++----
+ app/src/main/res/values/strings.xml                    |  8 ++++----
+ app/src/main/res/xml/global_preferences.xml            | 10 +++++-----
+ 7 files changed, 20 insertions(+), 20 deletions(-)
+
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/Constants.kt b/app/src/main/java/io/nekohasekai/sagernet/Constants.kt
+index 7b9b83e74..be2b4d02b 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/Constants.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/Constants.kt
+@@ -40,7 +40,7 @@ object Key {
+     const val MIXED_USERNAME = "mixedUsername"
+     const val MIXED_PASSWORD = "mixedPassword"
+     const val ALLOW_ACCESS = "allowAccess"
+-    const val DISABLE_MIXED = "disableMixed"
++    const val ENABLE_MIXED = "enableMixed"
+     const val SPEED_INTERVAL = "speedInterval"
+     const val SHOW_DIRECT_SPEED = "showDirectSpeed"
+ 
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt b/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt
+index 730d4093d..6ed2afcfb 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/database/DataStore.kt
+@@ -142,7 +142,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
+         }
+     }
+ 
+-    var disableMixed by configurationStore.boolean(Key.DISABLE_MIXED)
++    var enableMixed by configurationStore.boolean(Key.ENABLE_MIXED)
+ 
+     private fun getLocalPort(key: String, default: Int): Int {
+         return parsePort(configurationStore.getString(key), default + userIndex)
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt b/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
+index 2b62e455c..ac9c9377b 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
+@@ -227,7 +227,7 @@ fun buildConfig(
+                     }
+                 }
+             })
+-            if (!DataStore.disableMixed) {
++            if (!DataStore.enableMixed) {
+                 inbounds.add(Inbound_MixedOptions().apply {
+                     type = "mixed"
+                     tag = TAG_MIXED
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt b/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
+index a79af4a27..480edc8ed 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
+@@ -64,7 +64,7 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
+         val mixedPort = findPreference<EditTextPreference>(Key.MIXED_PORT)!!
+         val mixedUsername = findPreference<EditTextPreference>(Key.MIXED_USERNAME)!!
+         val mixedPassword = findPreference<EditTextPreference>(Key.MIXED_PASSWORD)!!
+-        val disableMixed = findPreference<SwitchPreference>(Key.DISABLE_MIXED)!!
++        val enableMixed = findPreference<SwitchPreference>(Key.ENABLE_MIXED)!!
+         val serviceMode = findPreference<Preference>(Key.SERVICE_MODE)!!
+         val allowAccess = findPreference<Preference>(Key.ALLOW_ACCESS)!!
+         val appendHttpProxy = findPreference<SwitchPreference>(Key.APPEND_HTTP_PROXY)!!
+@@ -163,9 +163,9 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
+             mixedPrefsToToggle.forEach { it?.isEnabled = !disabled }
+         }
+ 
+-        updateMixedPrefsState(disableMixed?.isChecked == true)
++        updateMixedPrefsState(enableMixed?.isChecked == true)
+ 
+-        disableMixed?.setOnPreferenceChangeListener { _, newValue ->
++        enableMixed?.setOnPreferenceChangeListener { _, newValue ->
+             updateMixedPrefsState(newValue as Boolean)
+             needReload()
+             true
+@@ -174,7 +174,7 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
+         mixedPort.onPreferenceChangeListener = reloadListener
+         mixedUsername.onPreferenceChangeListener = reloadListener
+         mixedPassword.onPreferenceChangeListener = reloadListener
+-        //disableMixed.onPreferenceChangeListener = reloadListener
++        //enableMixed.onPreferenceChangeListener = reloadListener
+         appendHttpProxy.onPreferenceChangeListener = reloadListener
+         showDirectSpeed.onPreferenceChangeListener = reloadListener
+         trafficSniffing.onPreferenceChangeListener = reloadListener
+diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
+index e1f81e901..fab9ea251 100644
+--- a/app/src/main/res/values-ru/strings.xml
++++ b/app/src/main/res/values-ru/strings.xml
+@@ -27,10 +27,10 @@
+ <string name="ads">Реклама</string>
+ <string name="allow_access">Разрешить подключения из локальной сети</string>
+ <string name="allow_access_sum">Привязать входящие серверы к 0.0.0.0</string>
+-<string name="proxy_username">Юзернейм прокси</string>
+-<string name="proxy_password">Пароль прокси</string>
+-<string name="disable_mixed">Отключить прокси SOCKS5</string>
+-<string name="disable_mixed_sum">Отключить прокси SOCKS5 для недопущения утечки внешнего IP сервера VPN</string>
++<string name="proxy_username">Логин</string>
++<string name="proxy_password">Пароль</string>
++<string name="ENABLE_MIXED">Включить прокси SOCKS5</string>
++<string name="ENABLE_MIXED_sum">Использование SOCKS5-прокси может раскрыть внешний IP VPN-сервера</string>
+ <string name="allow_insecure">Разрешить небезопасное подключение</string>
+ <string name="allow_insecure_on_request_sum">Отключить проверку сертификатов при обновлении подписок</string>
+ <string name="allow_insecure_sum">Отключить проверку сертификата. При включении эта функция настолько же безопасна как передача пароля в открытом виде</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index aac087d3e..269927ab1 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -58,10 +58,10 @@
+     <string name="cag_route">Route Settings</string>
+     <string name="allow_access">Allow Connections from the LAN</string>
+     <string name="allow_access_sum">Bind inbound servers to 0.0.0.0</string>
+-    <string name="proxy_username">Proxy Username</string>
+-    <string name="proxy_password">Proxy Password</string>
+-    <string name="disable_mixed">Disable SOCKS5 proxy</string>
+-    <string name="disable_mixed_sum">SOCKS5 proxy can be disabled to prevent VPN server external IP leak</string>
++    <string name="proxy_username">Username</string>
++    <string name="proxy_password">Password</string>
++    <string name="ENABLE_MIXED">Enable SOCKS5 proxy</string>
++    <string name="ENABLE_MIXED_sum">Enabled SOCKS5 proxy may expose the VPN server\'s external IP</string>
+     <string name="inbound_settings">Inbound Settings</string>
+     <string name="general_settings">App Settings</string>
+     <string name="require_http">Enable HTTP inbound</string>
+diff --git a/app/src/main/res/xml/global_preferences.xml b/app/src/main/res/xml/global_preferences.xml
+index 78c1c846e..b7b27ca60 100644
+--- a/app/src/main/res/xml/global_preferences.xml
++++ b/app/src/main/res/xml/global_preferences.xml
+@@ -189,6 +189,11 @@
+     </PreferenceCategory>
+ 
+     <PreferenceCategory app:title="@string/inbound_settings">
++        <SwitchPreference
++            app:defaultValue="false"
++            app:key="enableMixed"
++            app:summary="@string/ENABLE_MIXED_sum"
++            app:title="@string/ENABLE_MIXED" />
+         <EditTextPreference
+             app:icon="@drawable/ic_maps_directions_boat"
+             app:key="mixedPort"
+@@ -214,11 +219,6 @@
+             app:key="allowAccess"
+             app:summary="@string/allow_access_sum"
+             app:title="@string/allow_access" />
+-        <SwitchPreference
+-            app:defaultValue="false"
+-            app:key="disableMixed"
+-            app:summary="@string/disable_mixed_sum"
+-            app:title="@string/disable_mixed" />
+     </PreferenceCategory>
+ 
+     <PreferenceCategory app:title="@string/cag_misc">
+
+From 00316ca2d921903084f82dd2b4070a1b03084911 Mon Sep 17 00:00:00 2001
+From: IdiotEbrilo <idotebrilo@gmail.com>
+Date: Wed, 15 Apr 2026 17:16:50 +0300
+Subject: [PATCH 5/6] UI refactoring
+
+---
+ .../main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt    | 2 +-
+ .../io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt  | 4 ++--
+ app/src/main/res/xml/global_preferences.xml                   | 2 +-
+ 3 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt b/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
+index ac9c9377b..798244493 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/fmt/ConfigBuilder.kt
+@@ -227,7 +227,7 @@ fun buildConfig(
+                     }
+                 }
+             })
+-            if (!DataStore.enableMixed) {
++            if (DataStore.enableMixed) {
+                 inbounds.add(Inbound_MixedOptions().apply {
+                     type = "mixed"
+                     tag = TAG_MIXED
+diff --git a/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt b/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
+index 480edc8ed..7700a9b88 100644
+--- a/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
++++ b/app/src/main/java/io/nekohasekai/sagernet/ui/SettingsPreferenceFragment.kt
+@@ -159,8 +159,8 @@ class SettingsPreferenceFragment : PreferenceFragmentCompat() {
+             findPreference<Preference>("allowAccess")
+         )
+ 
+-        fun updateMixedPrefsState(disabled: Boolean) {
+-            mixedPrefsToToggle.forEach { it?.isEnabled = !disabled }
++        fun updateMixedPrefsState(enabled: Boolean) {
++            mixedPrefsToToggle.forEach { it?.isEnabled = enabled }
+         }
+ 
+         updateMixedPrefsState(enableMixed?.isChecked == true)
+diff --git a/app/src/main/res/xml/global_preferences.xml b/app/src/main/res/xml/global_preferences.xml
+index b7b27ca60..35f6a214e 100644
+--- a/app/src/main/res/xml/global_preferences.xml
++++ b/app/src/main/res/xml/global_preferences.xml
+@@ -190,7 +190,7 @@
+ 
+     <PreferenceCategory app:title="@string/inbound_settings">
+         <SwitchPreference
+-            app:defaultValue="false"
++            app:defaultValue="true"
+             app:key="enableMixed"
+             app:summary="@string/ENABLE_MIXED_sum"
+             app:title="@string/ENABLE_MIXED" />
+
+From d19d8cd68f01ed5b4305769a70446c47ae2293cd Mon Sep 17 00:00:00 2001
+From: IdiotEbrilo <idotebrilo@gmail.com>
+Date: Wed, 15 Apr 2026 18:33:01 +0300
+Subject: [PATCH 6/6] UI refactoring
+
+---
+ app/src/main/res/values-ru/strings.xml      | 4 ++--
+ app/src/main/res/values/strings.xml         | 4 ++--
+ app/src/main/res/xml/global_preferences.xml | 4 ++--
+ 3 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
+index fab9ea251..0f632a9b0 100644
+--- a/app/src/main/res/values-ru/strings.xml
++++ b/app/src/main/res/values-ru/strings.xml
+@@ -29,8 +29,8 @@
+ <string name="allow_access_sum">Привязать входящие серверы к 0.0.0.0</string>
+ <string name="proxy_username">Логин</string>
+ <string name="proxy_password">Пароль</string>
+-<string name="ENABLE_MIXED">Включить прокси SOCKS5</string>
+-<string name="ENABLE_MIXED_sum">Использование SOCKS5-прокси может раскрыть внешний IP VPN-сервера</string>
++<string name="enable_mixed">Включить прокси SOCKS5</string>
++<string name="enable_mixed_sum">Использование прокси SOCKS5 может раскрыть внешний IP VPN-сервера</string>
+ <string name="allow_insecure">Разрешить небезопасное подключение</string>
+ <string name="allow_insecure_on_request_sum">Отключить проверку сертификатов при обновлении подписок</string>
+ <string name="allow_insecure_sum">Отключить проверку сертификата. При включении эта функция настолько же безопасна как передача пароля в открытом виде</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 269927ab1..086a81f95 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -60,8 +60,8 @@
+     <string name="allow_access_sum">Bind inbound servers to 0.0.0.0</string>
+     <string name="proxy_username">Username</string>
+     <string name="proxy_password">Password</string>
+-    <string name="ENABLE_MIXED">Enable SOCKS5 proxy</string>
+-    <string name="ENABLE_MIXED_sum">Enabled SOCKS5 proxy may expose the VPN server\'s external IP</string>
++    <string name="enable_mixed">Enable SOCKS5 proxy</string>
++    <string name="enable_mixed_sum">Enabled SOCKS5 proxy may expose the VPN server\'s external IP</string>
+     <string name="inbound_settings">Inbound Settings</string>
+     <string name="general_settings">App Settings</string>
+     <string name="require_http">Enable HTTP inbound</string>
+diff --git a/app/src/main/res/xml/global_preferences.xml b/app/src/main/res/xml/global_preferences.xml
+index 35f6a214e..03318dbd8 100644
+--- a/app/src/main/res/xml/global_preferences.xml
++++ b/app/src/main/res/xml/global_preferences.xml
+@@ -192,8 +192,8 @@
+         <SwitchPreference
+             app:defaultValue="true"
+             app:key="enableMixed"
+-            app:summary="@string/ENABLE_MIXED_sum"
+-            app:title="@string/ENABLE_MIXED" />
++            app:summary="@string/enable_mixed_sum"
++            app:title="@string/enable_mixed" />
+         <EditTextPreference
+             app:icon="@drawable/ic_maps_directions_boat"
+             app:key="mixedPort"
