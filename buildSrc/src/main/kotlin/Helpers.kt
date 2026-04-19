@@ -120,7 +120,7 @@ fun Project.setupAppCommon() {
     val pwd = lp.getProperty("ALIAS_PASS") ?: System.getenv("ALIAS_PASS")
 
     android.apply {
-        if (keystorePwd != null) {
+        if (!keystorePwd.isNullOrBlank()) {
             signingConfigs {
                 create("release") {
                     storeFile = rootProject.file("release.keystore")
@@ -135,6 +135,9 @@ fun Project.setupAppCommon() {
             if (key != null) {
                 getByName("release").signingConfig = key
                 getByName("debug").signingConfig = key
+            } else {
+                val debugKey = signingConfigs.getByName("debug")
+                getByName("release").signingConfig = debugKey
             }
         }
     }
