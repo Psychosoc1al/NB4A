@@ -144,14 +144,6 @@ suspend fun parseProxies(text: String): List<AbstractBean> {
                 entities.add(parseHttp(this))
             }.onFailure {
                 Logs.w(it)
-                val clashUrl = HttpUrl.Builder()
-                    .scheme("https")
-                    .host("install-config")
-                    .addQueryParameter("url", this)
-                    .build()
-                    .toString()
-                    .replaceFirst("https://", "clash://")
-                throw (SubscriptionFoundException(clashUrl))
             }
         } else if (startsWith("vmess://")) {
             Logs.d("Try parse v2ray link: $this")
