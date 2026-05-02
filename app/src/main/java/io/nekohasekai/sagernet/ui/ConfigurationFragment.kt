@@ -704,6 +704,7 @@ class ConfigurationFragment @JvmOverloads constructor(
 
         val results: MutableSet<ProxyEntity> = ConcurrentHashMap.newKeySet()
         var proxyN = 0
+        var successN = AtomicInteger(0)
         val finishedN = AtomicInteger(0)
 
         fun update(profile: ProxyEntity) {
@@ -741,6 +742,7 @@ class ConfigurationFragment @JvmOverloads constructor(
                     1 -> {
                         profileStatusText = getString(R.string.available, profile.ping)
                         profileStatusColor = context.getColour(R.color.material_green_500)
+                        successN.addAndGet(1)
                     }
 
                     2 -> {
@@ -774,7 +776,7 @@ class ConfigurationFragment @JvmOverloads constructor(
                 }
 
                 binding.nowTesting.text = text
-                binding.progress.text = "$progress / $proxyN"
+                binding.progress.text = "$progress ($successN) / $proxyN"
             }
         }
 
